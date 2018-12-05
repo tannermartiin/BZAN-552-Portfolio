@@ -1,0 +1,186 @@
+---
+title: "KickStarter - Post3"
+author: "Tanner Martin"
+date: "December 2, 2018"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## KICK STARTER - POST 3 - CLASSIFICATION AND VARIABLE SELECTION
+
+IN THIS PROBLEM WE HAVE DATA ON APPROXIMATELY 380k KICKSTARTER PROJECTS. WE HAVE DATA ON NAME, CATEGORY, CURRENCY, DEADLINE, GOAL, LAUNCHED, PLEDGED, STATE(OR RESULT OF CAMPAIGN), BACKERS, COUNTRY, AND A FEW OTHER VARIABLES ABOUT MONEY WE WON'T USE. THE GOAL IS TO BUILD A CLASSIFICATION MODEL AND USE SOME FORM OF VARIABLE SELECTION (THROUGH DECISION TREE OR SOME OTHER METHOD) TO CHOOSE THE VARIABLES THAT WILL LEAD TO THE BEST PERFORMANCE.
+```{r}
+
+ks <- read.csv("ks-projects-201801.csv")
+table(ks$state)
+
+```
+
+WE ONLY NEED THE ROWS WHERE THE CAMPAIGN IS EITHER FAILED OR SUCCESFUL (WHICH IS THE MAJORITY).
+```{r}
+
+ks <- ks[which(ks$state=="failed" | ks$state == "successful"),]
+
+length(which(ks$state=="failed"))/nrow(ks) #percent failed
+length(which(ks$state=="successful"))/nrow(ks) #percent successful
+
+
+```
+
+NOW, WE WILL SELECT ONLY THE COLUMNS THAT WE WILL POTENTIALLY NEED IN BUILDING THE MODEL OR THAT WE WON'T TO USE FOR VARIABLE SELECTION.
+```{r}
+ks <- ks[,c("category","main_category","currency","deadline","goal","launched","state","backers","country")]
+
+
+```
+
+HERE WE WILL DO EXPLORATORY ANALYSIS OF THE DATA TO SEE IF WE CAN GET A SENSE OF WHAT IS GOING ON BEFORE JUMPING RIGHT INTO BUILDING A MODEL.
+```{r}
+summary(ks)
+
+
+#THERE'S SOME GOALS THAT ARE VERY SMALL (BELOW $100). LET'S REMOVE THOSE.
+ks <- ks[-which(ks$goal <= 100),]
+hist(log(ks$goal)) #looks good let's go ahead and log
+ks$log_goal <- log(ks$goal)
+
+summary(ks$backers)
+hist(ks$backers)
+#lets log and add 1 so we don't log 0's
+hist(log(ks$backers+1))
+ks$log_backers <- log(ks$backers+1)
+
+
+```
+
+I WANT TO ADD IN A COLUMN THAT'S THE DIFFERENCE BETWEEN THE LAUNCH DATE AND THE DEADLINE (THE LENGTH OF THE CAMPAIGN IN TIME). ALSO, I WANT TO ADD A COLUMN THAT INCLUDES THE DAY OF THE WEEK THE CAMPAIGN WAS LAUNCHED AND THE DEADLINE DAY OF THE WEEK.
+```{r}
+library(lubridate)
+
+head(ks$launched)
+head(ks$deadline)
+
+launched <- mdy_hm(ks$launched)
+deadline <- mdy(ks$deadline)
+
+ks$launch_month <- month(launched, label = T)
+ks$deadline_month <- month(deadline, label = T)
+plot(ks$launch_month)
+plot(ks$deadline_month)
+
+ks$launch_day <- wday(launched, label = T)
+ks$deadline_day <- wday(deadline, label=T)
+plot(ks$launch_day)
+plot(ks$deadline_day)
+
+ks$launched <- sub(" .*", "", ks$launched)
+ks$launched <- mdy(ks$launched)
+ks$deadline <- mdy(ks$deadline)
+ks$length_of_launch <- as.numeric(ks$deadline-ks$launched)
+hist(ks$length_of_launch)
+
+```
+
+ONE OF THE VARIABLES WE'RE GOING TO USE HAS MORE THAN 53 LEVELS (NOT ACCEPTABLE FOR RANDOM FOREST). WE CAN COMBINE THE "RARE" LEVELS TO REDUCE THAT DOWN TO AN AMOUNT THAT MAKES SENSE FOR THE MODEL. ALTHOUGH WE ARE DEFINTILEY LOSING SOME INFORMATION, PREDICTIVE MODELING WILL NEVER BE PERFECT. HAVING A MODEL THAT'S FUNCTIONING AND GENERALIZES WELL IS BETTER THAN NOTHING AT ALL.
+```{r}
+library(regclass)
+table(ks$category)
+CL <- combine_rare_levels(ks$category, threshold = 2000)
+length(levels(CL$values)) #good
+
+ks$category_comb <- CL$values
+
+```
+
+LET'S PROCEED WITH THE MODEL BUILDING PROCESS TO TRY OUT A COUPLE DIFFERENT METHODS THAT WILL ALSO SELECT VARIABLES FOR US.
+```{r}
+
+model.data <- ks[,c("currency","state","country","log_goal",
+                     "launch_month","deadline_month","launch_day",
+                    "deadline_day","category_comb","length_of_launch")]
+
+model.data$state <- droplevels(model.data$state)
+
+```
+
+NEXT, WE WILL SPLIT THE DATA INTO 70% TRAINING AND 30% TEST. ALSO, I'M GOING TO SAMPLE DOWN THE TEST AND TRAINING DATA TO MUCH SMALLER SAMPLE SIZES FOR EXAMPLE PURPOSES. 
+```{r}
+
+train.rows <- sample(1:nrow(ks), size=nrow(ks)*.7, replace = F)
+train <- model.data[train.rows,]
+test <- model.data[-train.rows,]
+
+colnames(ks)[colSums(is.na(ks)) > 0] #no missing data
+
+set.seed(400)
+mini_train <- train[sample(1:nrow(train),size=nrow(train)*.4,replace = F),]
+mini_test <- test[sample(1:nrow(test), size=nrow(test)*.4,replace = F),]
+
+
+```
+
+HERE I AM GOING TO FIT A MODEL ON MINI TRAIN, CALCULATE AND LOOK AT IT'S AUC AND HOW IT GENERALIZES TO KNEW DATA (MINI_TEST). ADDITIONALLY, WE'LL TAKE A LOOK AT THE VARIABLE IMPORTANCE. THIS PLOT TELLS US WHAT VARIABLES THE RANDOM FOREST MODEL "CHOSE" (AND ARE THEREFORE IMPORTANT) TO MAKE IT'S PREDICTIONS OF WHETHER A KICKSTARTER CAMPAIGN WILL BE SUCCESSFUL OR NOT. 
+```{r}
+
+fit <- randomForest(state~.,data = mini_train)
+
+library(pROC)
+rf.roc.train <-roc(mini_train$state,fit$votes[,2])
+plot(rf.roc.train)
+auc(rf.roc.train)
+
+#test predictions
+predictions <- predict(fit, newdata = mini_test, type="prob")[,2]
+rf.roc.test <- roc(mini_test$state,predictions)
+auc(rf.roc.test)
+
+
+
+```
+
+IT LOOKS LIKE THE MODEL HAS GENERALIZED PRETTY WELL TO NEW DATA. THE AUC ON THE TRAINING DATA WAS 0.6161 WHEN DEPLOYED ON THE TEST DATA, IT'S NOW 0.6219 IT'S ACTUALLY BETTER! IF WE WOULD HAVE SEEN AN AUC ON THE TEST SET OF .55 (OR SOMETHING LIKE THAT), THEN THAT WOULD INDICATE OUR MODEL IS OVERFIT. AN AUC OF .64 TELL US THE FOLLOWING: GIVEN TO RANDOM INSTANCES (ONE WHERE THE KS CAMPAIGN WAS SUCCESFUL AND ONE WHERE IT FAILED), OUR MODEL WOULD CORRECTLY CLASSIFY THESE 64% OF THE TIME.
+
+HOW VARIABLE SELECTION WORKS IN RANDOM FOREST:
+
+RANDOM FOREST MODELS ARE COMMONLY USED FOR VARIABLE SELECTION IN PRACTICE. THIS IS BECAUSE THE TREE-BASED METHOD USED NATURALLY RANKS BY HOW WELL THEY IMPROVE THE "PURITY" OF THE NODE. PURITY IS HOW MUCH THE MAJORITY OF ONE CLASS OR THE OTHER IMPROVES - IN SIMPLE TERMS, THE MORE PURE A SPLIT MAKES THE CLASSES IN THE NODE, THE HIGHER THE PURITY. NODES WITH THE BIGGEST DECREASE IN IMPURITY OCCUR AT THE BEGINNING OF THE TREES. PRUNING TREES BELOW A CERTAIN NODE, WE CAN CREATE A SUBSET OF THE MOST "IMPORTANT" VARIABLES.
+
+```{r}
+
+varImpPlot(fit)
+
+```
+
+THE CATEGORY OF THE CAMPAIGN IS THE MOST IMPORTANT OF ALL THE POTENTIAL VARIABLES (PERHAPS CERTAIN PRODUCT CATEGORIES ARE MORE VIRAL THAN OTHERS). IT LOOKS LIKE THE GOAL OF THE CAMPAIGN IS A BIG FACTOR IN SUCCESS. THIS MAKES SENSE BECAUSE MORE LOFTY GOALS ARE PROBABLY LESS LIKELY TO BE SUCCESSFUL. SETTING YOUR GOAL NUMBER IS DEFINITELY AN IMPORTANT FACTOR WHEN MAKING A NEW CAMPAIGN. THE TWO VARIABLES PREVIOUSLY MENTIONED ARE BY FAR THE TWO MOST "IMPORTANT" IN CORRECLTY PREDICTING CAMPAIGN SUCCESS. THE LENGTH OF LAUNCH, LAUNCH MONTH, DEADLINE MONTH, DEADLINE DAY, AND LAUNCH DAY ARE ALL VERY COMPARABLE IN IMPORTANCE. WE COULD POTENTIALLY TAKE OUT COUNTRY AND CURRENCY AND SEE HOW THE PERFORMANCE HOLDS UP WITHOUT THESE TWO BECAUSE A SIMPLER MODEL (LESS VARIABLES) IS ALWAYS PREFERRED.
+
+```{r}
+
+model.data <- ks[,c("state","log_goal",
+                     "launch_month","deadline_month","launch_day",
+                    "deadline_day","category_comb","length_of_launch")]
+
+model.data$state <- droplevels(model.data$state)
+
+fit <- randomForest(state~.,data = mini_train)
+
+library(pROC)
+rf.roc.train <-roc(mini_train$state,fit$votes[,2])
+plot(rf.roc.train)
+auc(rf.roc.train)
+
+#test predictions
+predictions <- predict(fit, newdata = mini_test, type="prob")[,2]
+rf.roc.test <- roc(mini_test$state,predictions)
+auc(rf.roc.test)
+
+
+
+```
+
+
+SURPRISINGLY, THE PERFORMANCE DIDN'T REALLY CHANGE MUCH AT ALL. THIS IS A GOOD THING! I WOULD SAY WE COULD COMFORTABLY REMOVE THOSE TWO VARIABLES TO DECREASE THE COMPLEXITY AND INCREASE THE INTERPRETABILITY OF THE MODEL. 
+
+
+
