@@ -1,0 +1,103 @@
+---
+title: "Online Retail - Post1"
+author: "Tanner Martin"
+date: "November 26, 2018"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+READING IN THE DATA. THIS...This is a transnational data set which contains all the transactions occurring between 01/12/2010 and 09/12/2011 for a UK-based and registered non-store online retail.The company mainly sells unique all-occasion gifts. Many customers of the company are wholesalers.
+```{r}
+OR <- read.csv("Online Retail.csv")
+head(table(OR$Description))
+
+```
+
+WE MIGHT BE INTERESTED IN KNOWING WHAT PRODUCTS ARE BOUGHT FREQUENTLY TOGETHER SO THAT WE CAN PROMOTE CERTAIN PRODUCTS TOGETHER, SO WE ARE GOING TO DO AN EXPLORATORY ASSOCIATION RULE MINING TO. THIS WILL TELL US "KNOWING THAT SOME BOUGHT PRODUCT A WE CAN KNOW WITH A CERTAIN LEVEL OF CONFIDENCE THEY MIGHT ALSO LIKE PRODUCT B. FOR SIMPLICITY SAKE, WE WILL ONLY RUN THIS ANALYSIS ON FRANCE'S TRANSACTIONS FOR SIMPLICITY SAKE (~8000 TRANSACTIONS)
+```{r}
+table(OR$Country)
+France <- OR[which(OR$Country=="France"),]
+France$Description <- as.character(France$Description)
+France$InvoiceNo <- as.character(France$InvoiceNo)
+
+library(arules)
+trans <- as(split(France[,"Description"], France[,"InvoiceNo"]), "transactions")
+inspect( head(trans,5) )
+
+```
+
+WE CAN VERY EASILY SEE THE MOST FREQUENTLY PURCHASED ITEMS IN FRANCE WITH THE CODE BELOW.
+```{r}
+
+itemFrequencyPlot(trans,topN=20,type="absolute",horiz=TRUE)
+
+```
+
+IT'S CLEAR THAT POSTAGE IS MOST FREQUENT IN FRANCE. THE BEST EXPLANATION OF THIS IS BECAUSE WHEN SOMEONE BUYS SOMETHING FROM THE UK IN FRANCE, THEY ARE REQUIRED TO BUY POSTAGE. WE CAN PROBABLY REMOVE POSTAGE FROM THE ANALYSIS BECAUSE WHEN IN AN ITEM IS IN SUCH A LARGE AMOUNT OF BASKETS, IT ISN'T AS USEFUL TO US.
+```{r}
+
+France <- France[-which(France$Description=="POSTAGE"),]
+trans <- as(split(France[,"Description"], France[,"InvoiceNo"]), "transactions")
+
+
+itemFrequencyPlot(trans,topN=20,type="absolute",horiz=TRUE)  #counts
+itemFrequencyPlot(trans,topN=20,type="relative",horiz=TRUE)  #supports
+
+
+#FIRS 6 SUPPORTS ALPHABETICALLY
+head( itemFrequency(trans) )
+
+#SUPPORT OF "LUNCH BAG CARS BLUE"
+itemFrequency(trans)["LUNCH BAG CARS BLUE"] 
+
+#NUMBER OF CARTS OR INVOICES
+length(trans)
+
+
+```
+
+NOW WE WILL RUN THE APRIORI ALGORITHM TO CREATE RULES THAT WILL TELL US WHAT ITEMS ARE BOUGHT FREQUENTLY TOGETHER. IT'S IMPORTANT TO KEEP IN MIND THAT NOT ALL RULES WILL BE USEFUL. FOR EXAMPLE, IF WE KNOW THAT PRODUCT A IS IN THE CART, THEN PRODUCT B IS 10x'S MORE LIKELY TO BE IN THE CART. SEEMS VERY USEFUL, RIGHT? HOWEVER, IF PRODUCT B HAS A VERY HIGH SUPPORT (THIS MEANS IT'S IN A LARGE MAJORITY OF BASKETS), THEN THIS RULE ISN'T ALL THAT USEFUL TO US. JUST TO BE CLEAR, HERE IS A DEFINITION OF THE METRICS WE WILL BE CONSIDERING AND HOW TO READ THE RULES.
+
+{A} --> {B} SUPPORT: .03 CONFIDENCE: 0.8 LIFT: 10
+IN ENGLISH: GIVEN PRODUCT A IS IN THE CART, WE KNOW THAT PRODUCT B IS 10X'S MORE LIKELY TO BE IN THE CART (LIFT). PRODUCT A AND B ARE IN 3% (SUPPORT) OF CARTS TOGETHER OVERALL. THIS RULE IS TRUE FOR 80% (CONFIDENCE) OF CARTS.
+```{r}
+
+rules <- apriori(trans, parameter = list(supp = 0.03, conf = 0.8, minlen=2, maxlen=4),control=list(verbose=FALSE))
+
+rules <- rules[!is.redundant(rules)]
+length(rules)
+inspect(rules[1:5])
+
+
+```
+
+NOW WE CAN LOOK AT THE TOP 10 RULES BY CONFIDENCE, LIFT, AND SUPPORT.
+```{r}
+
+inspect( sort(rules,by="confidence",decreasing=TRUE)[1:10] )
+#Because this is wholesale data it's likely that people are buying in higher quantities than they'd buy on a regular online store. Most of these rules appear to be paper plates, napkins, and cups that are involved. This first rule is interesting because of how high the lift is. These first 7 rules involve pretty much all similar products: paper plates, cups, and napkins. This first rule is interesting because of how high the lift is with a 100% confidence.
+
+inspect( sort(rules,by="lift",decreasing=TRUE)[1:10] )
+#Some of these rules are redundant (just flip flopped). However, sorting by lift shoes us some interesting rules that don't involve only party supplies. It seems that if someone has a dolly or woodland backpack, then they are 24x's more likely to also have the other version. The 3rd rule is interesting because it has a high lift, high confidence, and relatively high support (3%). This rule looks like someone is buying a Dolly kitchen set.
+
+inspect( sort(rules,by="support",decreasing=TRUE)[1:10] )
+#When we sort by support it looks like paper plates, cups, and napkins dominate the analysis. Rule 10 is one we haven't seen yet. Alarm clock's are being bought in bulk in different colors.
+
+
+```
+
+LET'S PLOT TO VISUALIZE THINGS EASILY.
+```{r}
+
+library(arulesViz)
+#Two key plot.  Can shade with other quality measures
+plot(rules, shading="lift", control=list(main ="Two-key plot"))
+
+
+```
+
+THIS PLOT ABOVE ALLOWS US TO VISUALLY ASSESS ALL 3 METRICS THAT WE CARE ABOUT WITH THESE ASSOCIATION RULES. IT APPEARS THAT RULES WITH LOWER SUPPORT TEND TO HAVE HIGHER LIFTS AND RULES WITH HIGHER SUPPORT TEND TO HAVE LOWER. THERE ARE A COUPLE RULES IN THE MIDDLE THAT ARE VERY INTERESTING BECAUSE THEY LOOK TO HAVE A MODERATE VALUE OF ALL 3 (POTENTIALLY VERY POWERFUL RULES).
